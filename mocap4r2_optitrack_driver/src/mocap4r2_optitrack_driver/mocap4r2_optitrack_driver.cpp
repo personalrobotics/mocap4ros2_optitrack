@@ -24,6 +24,7 @@
 
 #include "mocap4r2_msgs/msg/marker.hpp"
 #include "mocap4r2_msgs/msg/markers.hpp"
+#include "geometry_msgs/msg/pose_stamped.hpp"
 
 #include "mocap4r2_optitrack_driver/mocap4r2_optitrack_driver.hpp"
 #include "lifecycle_msgs/msg/state.hpp"
@@ -133,57 +134,78 @@ OptitrackDriverNode::process_frame(sFrameOfMocapData * data)
   std::map<int, std::vector<mocap4r2_msgs::msg::Marker>> marker2rb;
 
   // Markers
-  if (mocap4r2_markers_pub_->get_subscription_count() > 0) {
-    mocap4r2_msgs::msg::Markers msg;
+  // if (mocap4r2_markers_pub_->get_subscription_count() > 0) {
+  //   mocap4r2_msgs::msg::Markers msg;
+  //   msg.header.stamp = now() - frame_delay;
+  //   msg.header.frame_id = "map";
+  //   msg.frame_number = frame_number_;
+
+  //   for (int i = 0; i < data->nLabeledMarkers; i++) {
+  //     bool Unlabeled = ((data->LabeledMarkers[i].params & 0x10) != 0);
+  //     bool ActiveMarker = ((data->LabeledMarkers[i].params & 0x20) != 0);
+  //     sMarker & marker_data = data->LabeledMarkers[i];
+  //     int modelID, markerID;
+  //     NatNet_DecodeID(marker_data.ID, &modelID, &markerID);
+
+  //     mocap4r2_msgs::msg::Marker marker;
+  //     marker.id_type = mocap4r2_msgs::msg::Marker::USE_INDEX;
+  //     marker.marker_index = i;
+  //     marker.translation.x = marker_data.x;
+  //     marker.translation.y = marker_data.y;
+  //     marker.translation.z = marker_data.z;
+  //     if (ActiveMarker || Unlabeled) {
+  //       msg.markers.push_back(marker);
+  //     } else {
+  //       marker2rb[modelID].push_back(marker);
+  //     }
+  //   }
+  //   mocap4r2_markers_pub_->publish(msg);
+  // }
+
+  // Rigid Bodies
+
+  for (int i = 0; i < data->nRigidBodies; i++) {
+    // Handle publishers for each rigid body
+    
+    // Hard-coded names for hands
+    // TODO: Make this more general?
+    std::string hand_name;
+    if (data->RigidBodies[i].ID == 1) {
+      hand_name = "left";
+    } else if (data->RigidBodies[i].ID == 2) {
+      hand_name = "right";
+    } else {
+      hand_name = "rb_" + std::to_string(data->RigidBodies[i].ID);
+    }
+
+    std::string topic_name = "/manus_" + hand_name + "/controller_pose";
+    auto it = rigid_body_publishers_.find(topic_name);
+    if (it == rigid_body_publishers_.end()) {
+      // Create publisher if it doesn't exist
+      rigid_body_publishers_[topic_name] = this->create_publisher<geometry_msgs::msg::PoseStamped>(topic_name, 10);
+    }
+    auto pub = rigid_body_publishers_[topic_name];
+    
+    // Set header information
+    geometry_msgs::msg::PoseStamped msg;
     msg.header.stamp = now() - frame_delay;
-    msg.header.frame_id = "map";
-    msg.frame_number = frame_number_;
+    msg.header.frame_id = hand_name + "_tool0";
 
-    for (int i = 0; i < data->nLabeledMarkers; i++) {
-      bool Unlabeled = ((data->LabeledMarkers[i].params & 0x10) != 0);
-      bool ActiveMarker = ((data->LabeledMarkers[i].params & 0x20) != 0);
-      sMarker & marker_data = data->LabeledMarkers[i];
-      int modelID, markerID;
-      NatNet_DecodeID(marker_data.ID, &modelID, &markerID);
+    // Set position
+    msg.pose.position.x = data->RigidBodies[i].x;
+    msg.pose.position.y = data->RigidBodies[i].y;
+    msg.pose.position.z = data->RigidBodies[i].z;
 
-      mocap4r2_msgs::msg::Marker marker;
-      marker.id_type = mocap4r2_msgs::msg::Marker::USE_INDEX;
-      marker.marker_index = i;
-      marker.translation.x = marker_data.x;
-      marker.translation.y = marker_data.y;
-      marker.translation.z = marker_data.z;
-      if (ActiveMarker || Unlabeled) {
-        msg.markers.push_back(marker);
-      } else {
-        marker2rb[modelID].push_back(marker);
-      }
-    }
-    mocap4r2_markers_pub_->publish(msg);
-  }
+    // Set orientation
+    msg.pose.orientation.x = data->RigidBodies[i].qx;
+    msg.pose.orientation.y = data->RigidBodies[i].qy;
+    msg.pose.orientation.z = data->RigidBodies[i].qz;
+    msg.pose.orientation.w = data->RigidBodies[i].qw;
 
-  if (mocap4r2_rigid_body_pub_->get_subscription_count() > 0) {
-    mocap4r2_msgs::msg::RigidBodies msg_rb;
-    msg_rb.header.stamp = now() - frame_delay;
-    msg_rb.header.frame_id = "map";
-    msg_rb.frame_number = frame_number_;
+    // Set markers (update this if needed)
+    // msg.markers = marker2rb[data->RigidBodies[i].ID];
 
-    for (int i = 0; i < data->nRigidBodies; i++) {
-      mocap4r2_msgs::msg::RigidBody rb;
-
-      rb.rigid_body_name = std::to_string(data->RigidBodies[i].ID);
-      rb.pose.position.x = data->RigidBodies[i].x;
-      rb.pose.position.y = data->RigidBodies[i].y;
-      rb.pose.position.z = data->RigidBodies[i].z;
-      rb.pose.orientation.x = data->RigidBodies[i].qx;
-      rb.pose.orientation.y = data->RigidBodies[i].qy;
-      rb.pose.orientation.z = data->RigidBodies[i].qz;
-      rb.pose.orientation.w = data->RigidBodies[i].qw;
-      rb.markers = marker2rb[data->RigidBodies[i].ID];
-
-      msg_rb.rigidbodies.push_back(rb);
-    }
-
-    mocap4r2_rigid_body_pub_->publish(msg_rb);
+    pub->publish(msg);
   }
 }
 
